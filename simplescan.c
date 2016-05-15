@@ -6,57 +6,174 @@
 #include <bluetooth/hci.h>
 #include <bluetooth/hci_lib.h>
 
+#define MAX_RSP 255 // maximum of device that will be inquired
+#define MAX_NAME_LENGTH 248
+#define INQUIRY_LENGTH 8 //max duration of inquiry (multiply by 1.28 for time in seconds)
+#define MAX_NB_TRIALS 3
+
+int scan_and_show_bluetooth_devices(int host_id, int sock, inquiry_info *inq_info_array);
+int inquire_and_show_selected_bluetooth_devices(int device_id, int host_id, int sock, inquiry_info *inq_info_array);
+int ask_user_to_select_device(int num_rsp);
+
+/**
+ * int main(int argc, char **argv)
+ * @brief Inquire bluetooth neighboring devices, display info, ask user
+ * 		  for a device of interest and display info for that device
+ * @param argc, argv, unused
+ * @return EXIT_SUCCESS, EXIT_FAILURE
+ */
 int main(int argc, char **argv)
 {	
-	//inquiry_info initialised with a null pointer 
-    inquiry_info *ii = NULL;
-    //initializing maximum response and number of response
-    int max_rsp, num_rsp,j;
+	//array of inquiry_info (devices information)
+    inquiry_info *inq_info_array = NULL;
+    //initializing maximum response and number of response received
+    int num_rsp,user_selection=-1;
     //declaring host id, host socket used for communication 
-    int dev_id, sock, len, flags;
-    int i;
+    int host_id, sock;
     
-    
-    char addr[19] = { 0 };
-    char name[248] = { 0 };
 
-    dev_id = hci_get_route(NULL);
-    sock = hci_open_dev( dev_id );
+	//setup socket
+    host_id = hci_get_route(NULL);
+    sock = hci_open_dev( host_id );
 
-    if (dev_id < 0 || sock < 0) {
-        perror("opening socket");
-        exit(1);
+	/*check if all good or die*/
+    if (host_id < 0 || sock < 0) {
+        perror("cannot open socket");
+        return EXIT_FAILURE;
     }
 
-    len  = 8;
-    max_rsp = 255;
-    flags = IREQ_CACHE_FLUSH;
-    ii = (inquiry_info*)malloc(max_rsp * sizeof(inquiry_info));
-    
-    num_rsp = hci_inquiry(dev_id, len, max_rsp, NULL, &ii, flags);
-    if( num_rsp < 0 ) perror("hci_inquiry");
+	//allow memory for devices info
+    inq_info_array = (inquiry_info*)malloc(MAX_RSP * sizeof(inquiry_info));
 
-    for (i = 0; i < num_rsp; i++) {
-        ba2str(&(ii+i)->bdaddr, addr);
-        memset(name, 0, sizeof(name));
-        if (hci_read_remote_name(sock, &(ii+i)->bdaddr, sizeof(name), 
-            name, 0) < 0)
-            {
-			strcpy(name, "[unknown]");
-			}
-        printf("%d: %s  %s\n", i+1, addr, name);
-    }
+	// inquery and display device info
+	num_rsp = scan_and_show_bluetooth_devices(host_id, sock, inq_info_array);
+	
+    // check if any device found
+    if( num_rsp < 0 ){
+		perror("no devices found");
+        return EXIT_FAILURE;
+	}
+	
+	// get user selection
+    user_selection = ask_user_to_select_device(num_rsp);
     
-    printf("\n Choose your device by number\n");
-    scanf("%d",&j);
-    ba2str(&(ii+j-1)->bdaddr, addr);
-    if (hci_read_remote_name(sock, &(ii+j-1)->bdaddr, sizeof(name), 
-            name, 0) < 0)
-            {
-			strcpy(name, "[unknown]");
-			}
-    printf("The device %d is chosen, \nadress is: %s\nname is: %s\n", j, addr, name);
-    free( ii );
+    // inquire device selected by user
+    inquire_and_show_selected_bluetooth_devices(user_selection, host_id, sock, inq_info_array);
+    
+	// cleanup
+    free( inq_info_array );
     close( sock );
-    return 0;
+    
+    return EXIT_SUCCESS;
 }
+
+/**
+ * int scan_and_show_bluetooth_devices(int host_id, int sock, inquiry_info *inq_info_array)
+ * @brief Inquire bluetooth neighboring devices and display info
+ * @param host_id, identifies bluetooth host
+ * @param sock, opened socket
+ * @param inq_info_array, allocated array to store device info
+ * @return number of devices found
+ */
+int scan_and_show_bluetooth_devices(int host_id, int sock, inquiry_info *inq_info_array){
+	
+	int i;
+	char nb_trials= 0;
+	// set flag for inquiry
+	int flags = IREQ_CACHE_FLUSH;
+	
+    //init device address and name buffers
+    char dev_addr[19] = { 0 };
+    char dev_name[MAX_NAME_LENGTH] = { 0 };
+	
+	//run the inquiry
+    int num_rsp = hci_inquiry(host_id, INQUIRY_LENGTH, MAX_RSP, NULL, &inq_info_array, flags);
+    
+	// run over all devices and display name and address
+    for (i = 0; i < num_rsp; i++) {
+        
+        // get the address
+        ba2str(&(inq_info_array[i].bdaddr), dev_addr);
+        
+        // get the name
+        while (hci_read_remote_name(sock, &(inq_info_array[i].bdaddr), MAX_NAME_LENGTH, 
+            dev_name, 0) < 0 && nb_trials<MAX_NB_TRIALS){
+			nb_trials++;
+		}
+		
+		// check if couldn't get the name
+		if(nb_trials==MAX_NB_TRIALS){
+			strcpy(dev_name, "[unknown]");
+		}
+		
+		//show in console
+        printf("%d: %s  %s\n", i, dev_addr, dev_name);
+        fflush(stdout);
+    }
+	
+	return num_rsp;
+}
+
+/**
+ * int inquire_and_show_selected_bluetooth_devices(int device_id, int host_id, int sock, inquiry_info *inq_info_array)
+ * @brief show info about the device
+ * @param device_id, device to be displayed
+ * @param host_id, identifies bluetooth host
+ * @param sock, opened socket
+ * @param inq_info_array, allocated array to store device info
+ * @return EXIT_SUCCESS/EXIT_FAILURE
+ */
+int inquire_and_show_selected_bluetooth_devices(int device_id, int host_id, int sock, inquiry_info *inq_info_array){
+	
+	int nb_trials = 0;
+    //init device address and name buffers
+    char dev_addr[19] = { 0 };
+    char dev_name[MAX_NAME_LENGTH] = { 0 };
+    
+    // check that array is initialized
+	if(!inq_info_array){
+		printf("Scan devices first");
+		return EXIT_FAILURE;
+	}
+	
+	// show information about that device
+    ba2str(&(inq_info_array[device_id].bdaddr), dev_addr);
+    while(hci_read_remote_name(sock, &(inq_info_array[device_id].bdaddr), MAX_NAME_LENGTH, 
+            dev_name, 0) < 0 && nb_trials<MAX_NB_TRIALS){
+		nb_trials++;
+	}
+
+	// check if couldn't get the name
+	if(nb_trials==MAX_NB_TRIALS){
+		strcpy(dev_name, "[unknown]");
+	}
+	
+	
+    printf("The device %d is chosen, \naddress is: %s\nname is: %s\n", device_id, dev_addr, dev_name);
+	
+	return EXIT_SUCCESS;
+}
+
+/**
+ * int ask_user_to_select_device(int num_rsp)
+ * @brief ask user for a device id, loop until valid
+ * @param num_rsp, number of devices found
+ * @return user selection
+ */
+int ask_user_to_select_device(int num_rsp){
+	
+	int user_selection = -1;
+	char* buf[MAX_NAME_LENGTH];
+	
+	// ask user to pick a device of interest
+    while(user_selection<0 || user_selection>(num_rsp-1)){
+		printf("\nChoose your device by number:\n");
+		if(!scanf("%d",&user_selection)){
+			//flush and start again
+			fgets(buf,MAX_NAME_LENGTH,stdin);
+		}
+	}
+	
+	return user_selection;
+}
+
