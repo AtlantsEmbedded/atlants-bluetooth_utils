@@ -1,3 +1,13 @@
+/**
+ * @file simplescan.c
+ * @author Alex V. Joseph,
+ * 		   Frederic Simard (frederic.simard.1@outlook.com) || Atlants Embedded
+ * @brief Short example on how to scan bluetooth devices and inquire about a specific device
+ * @ref https://people.csail.mit.edu/albert/bluez-intro/c404.html
+ * @ref http://code.haskell.org/blues/blues/include/hci_lib.h
+ */
+
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
